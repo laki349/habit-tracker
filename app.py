@@ -192,7 +192,7 @@ def generate_report(
             "Content-Type": "application/json",
         }
         payload = {
-            "model": "gpt-5-mini",
+            "model": "gpt-4.1-mini",
             "input": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
