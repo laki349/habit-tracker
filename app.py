@@ -1,4 +1,3 @@
-
 # app.py
 import os
 import json
@@ -19,8 +18,8 @@ st.title("📊 AI 습관 트래커")
 # Sidebar: API Keys
 # -----------------------------
 st.sidebar.header("🔑 API 설정")
-openai_api_key = st.sidebar.text_input("OpenAI API Key", type="password", value=os.getenv("OPENAI_API_KEY", ""))
-owm_api_key = st.sidebar.text_input("OpenWeatherMap API Key", type="password", value=os.getenv("OPENWEATHERMAP_API_KEY", ""))
+openai_api_key = st.sidebar.text_input("OpenAI API 키", type="password", value=os.getenv("OPENAI_API_KEY", ""))
+owm_api_key = st.sidebar.text_input("OpenWeatherMap API 키", type="password", value=os.getenv("OPENWEATHERMAP_API_KEY", ""))
 
 st.sidebar.markdown("---")
 st.sidebar.caption("💡 키는 브라우저 세션에만 사용되며, 앱 코드에 저장되지 않도록 구성하세요.")
@@ -204,6 +203,43 @@ def get_daily_book():
         return None
 
 
+def draw_daily_tarot():
+    """
+    무료 공개 Tarot API에서 오늘의 카드를 뽑습니다.
+    - 실패 시 None
+    - timeout=10
+    """
+    try:
+        url = "https://tarot-api-3i8z.onrender.com/api/v1/cards/random?n=1"
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        cards = data.get("cards")
+        if not isinstance(cards, list) or not cards:
+            return None
+        card = cards[0]
+        is_reversed = bool(card.get("reversed", False))
+        meaning_upright = None
+        meaning_reversed = None
+        meaning = card.get("meaning_up")
+        if meaning:
+            meaning_upright = meaning
+        meaning_rev = card.get("meaning_rev")
+        if meaning_rev:
+            meaning_reversed = meaning_rev
+
+        return {
+            "card_name": card.get("name") or "알 수 없음",
+            "meaning_upright": meaning_upright or "의미를 가져오지 못했어요.",
+            "meaning_reversed": meaning_reversed,
+            "is_reversed": is_reversed,
+            "description": card.get("desc"),
+        }
+    except Exception:
+        return None
+
+
 def _system_prompt_for_style(style: str) -> str:
     if style == "스파르타 코치":
         return (
@@ -234,7 +270,7 @@ def generate_report(
 ):
     """
     습관 + 기분 + 날씨 + 강아지 품종 + 영감 + 책 정보를 묶어 OpenAI에 전달해 리포트를 생성합니다.
-    - 모델: gpt-5-mini
+    - 모델: gpt-4.1-mini
     - 실패 시 None
     """
     if not openai_key:
@@ -272,6 +308,13 @@ def generate_report(
             book_parts.append(f"요약: {book.get('short_summary')}")
         book_summary = " / ".join(book_parts)
 
+    tarot_summary = "오늘의 타로 정보 없음"
+    if tarot:
+        tarot_meaning = tarot.get("meaning_upright")
+        if tarot.get("is_reversed") and tarot.get("meaning_reversed"):
+            tarot_meaning = tarot.get("meaning_reversed")
+        tarot_summary = f"{tarot.get('card_name')} / {'역방향' if tarot.get('is_reversed') else '정방향'} / {tarot_meaning}"
+
     habits_kor = "\n".join([f"- {k}: {'✅' if v else '❌'}" for k, v in habits.items()])
     system_prompt = _system_prompt_for_style(coach_style)
 
@@ -307,6 +350,11 @@ def generate_report(
 [오늘의 책]
 {book_summary}
 
+[오늘의 타로]
+{tarot_summary}
+
+리포트에는 오늘의 영감 내용을 반드시 언급하고, 책의 주제나 메시지를 사용자의 습관/기분과 연결해줘.
+타로 메시지는 은유적으로 해석해서 습관, 기분, 성장 조언에 자연스럽게 녹여줘.
 리포트에는 오늘의 영감 내용을 반드시 언급하고, 책의 주제나 메시지를 사용자의 습관/기분과 연결해줘.
 
 요구 출력 형식:
@@ -427,6 +475,9 @@ if st.session_state.get("today_key") != today_key:
 
 
 # -----------------------------
+# 오늘의 영감
+# -----------------------------
+st.subheader("🌟 오늘의 영감")
 # Today's Inspiration
 # -----------------------------
 st.subheader("🌟 Today’s Inspiration")
@@ -451,6 +502,9 @@ with st.container():
 
 
 # -----------------------------
+# 오늘의 리딩 미션
+# -----------------------------
+st.subheader("📖 오늘의 리딩 미션")
 # Today's Reading Mission
 # -----------------------------
 st.subheader("📖 Today’s Reading Mission")
@@ -477,6 +531,29 @@ with st.container():
             st.info("오늘의 책 정보를 가져오지 못했어요. (OpenLibrary 네트워크 확인)")
         st.markdown(f"**오늘의 미션:** {mission_text}")
         st.checkbox("✅ 리딩 미션 완료", key="habit_reading")
+
+
+# -----------------------------
+# 오늘의 타로 메시지
+# -----------------------------
+st.subheader("🔮 오늘의 타로 메시지")
+tarot = _get_daily_cached("daily_tarot", draw_daily_tarot)
+with st.container():
+    if tarot:
+        direction = "역방향" if tarot.get("is_reversed") else "정방향"
+        meaning = tarot.get("meaning_upright")
+        if tarot.get("is_reversed") and tarot.get("meaning_reversed"):
+            meaning = tarot.get("meaning_reversed")
+        st.markdown(f"**{tarot.get('card_name')}** ({direction})")
+        st.write(f"의미: {meaning}")
+        if tarot.get("description"):
+            st.caption(tarot.get("description"))
+        st.markdown(
+            "오늘의 메시지를 습관과 기분에 비유해보세요. "
+            "작은 선택이 큰 변화를 만든다는 힌트일 수 있어요."
+        )
+    else:
+        st.info("타로 카드를 가져오지 못했어요. (Tarot API 네트워크 확인)")
 
 
 # -----------------------------
@@ -582,6 +659,7 @@ if btn:
             dog=dog,
             inspiration=inspiration,
             book=book,
+            tarot=tarot,
         )
 
     wcol, dcol = st.columns(2)
@@ -632,12 +710,12 @@ if btn:
 with st.expander("🔎 API 안내 / 설정 팁"):
     st.markdown(
         """
-- **OpenAI API Key**
+- **OpenAI API 키**
   - OpenAI 플랫폼에서 발급한 키를 입력하세요.
   - 본 앱은 **Responses API** (`/v1/responses`)로 호출합니다.
-  - 모델은 **gpt-5-mini**로 설정되어 있습니다.
+  - 모델은 **gpt-4.1-mini**로 설정되어 있습니다.
 
-- **OpenWeatherMap API Key**
+- **OpenWeatherMap API 키**
   - OpenWeatherMap에서 키를 발급받은 뒤 입력하세요.
   - `lang=kr`, `units=metric`(섭씨)로 요청합니다.
 
@@ -655,6 +733,10 @@ with st.expander("🔎 API 안내 / 설정 팁"):
 - **OpenLibrary API**
   - 별도 키 없이 사용합니다.
   - 오늘의 책 추천을 제공합니다.
+
+- **Tarot API**
+  - 별도 키 없이 사용합니다.
+  - 하루에 한 장의 타로 카드를 가져옵니다.
 
 - **보안 팁**
   - 배포 시에는 Streamlit Secrets 또는 서버 환경변수로 키를 주입하는 방식을 권장합니다.
