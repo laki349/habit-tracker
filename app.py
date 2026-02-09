@@ -3,6 +3,7 @@
 import os
 import json
 import requests
+import calendar
 from datetime import date, timedelta
 
 import pandas as pd
@@ -204,6 +205,27 @@ def get_daily_book():
         return None
 
 
+def build_book_reason(book: dict | None, mood: int, habits: dict, mission_text: str) -> str:
+    if not book:
+        return "오늘은 가볍게 몰입할 수 있는 주제로 분위기를 환기하기 좋아요."
+
+    reasons = []
+    if mood <= 4:
+        reasons.append("기분이 조금 가라앉은 날이라 부담 없는 자기돌봄 메시지가 도움이 돼요.")
+    elif mood >= 8:
+        reasons.append("에너지가 높은 날이라 실행력을 끌어올리는 메시지가 잘 맞아요.")
+    else:
+        reasons.append("무난한 컨디션이라 균형 잡힌 자기계발 주제가 어울려요.")
+
+    if habits.get("공부/독서") or habits.get("리딩 미션"):
+        reasons.append("이미 학습 흐름이 이어지고 있어, 한 챕터만 읽어도 성취감을 얻기 쉬워요.")
+    else:
+        reasons.append("짧은 미션으로 시작하면 독서 습관에 부담 없이 진입할 수 있어요.")
+
+    reasons.append(f"오늘의 미션은 '{mission_text}'로 설정했어요.")
+    return " ".join(reasons)
+
+
 def _system_prompt_for_style(style: str) -> str:
     if style == "스파르타 코치":
         return (
@@ -270,6 +292,8 @@ def generate_report(
         book_parts = [f"{book.get('title')} - {book.get('author')}"]
         if book.get("short_summary"):
             book_parts.append(f"요약: {book.get('short_summary')}")
+        if book.get("reason"):
+            book_parts.append(f"추천 이유: {book.get('reason')}")
         book_summary = " / ".join(book_parts)
 
     habits_kor = "\n".join([f"- {k}: {'✅' if v else '❌'}" for k, v in habits.items()])
@@ -357,7 +381,7 @@ def generate_report(
 
 
 # -----------------------------
-# Session State 초기화: 데모 6일 + 오늘(7일)
+# Session State 초기화: 데모 6일 + 오늘
 # -----------------------------
 def _init_history_if_needed():
     if "history" in st.session_state:
@@ -427,9 +451,9 @@ if st.session_state.get("today_key") != today_key:
 
 
 # -----------------------------
-# Today's Inspiration
+# 오늘의 영감
 # -----------------------------
-st.subheader("🌟 Today’s Inspiration")
+st.subheader("🌟 오늘의 영감")
 inspiration = _get_daily_cached("inspiration", get_daily_inspiration)
 with st.container():
     if inspiration:
@@ -448,35 +472,6 @@ with st.container():
                 st.write(f"— {quote_author}")
     else:
         st.info("오늘의 영감 정보를 가져오지 못했어요. (네트워크/API 확인)")
-
-
-# -----------------------------
-# Today's Reading Mission
-# -----------------------------
-st.subheader("📖 Today’s Reading Mission")
-book = _get_daily_cached("daily_book", get_daily_book)
-mission_options = [
-    "5쪽 읽기",
-    "10분 읽기",
-    "핵심 문장 1개 기록하기",
-    "챕터 1개 훑어보기",
-]
-mission_text = mission_options[date.today().toordinal() % len(mission_options)]
-with st.container():
-    bcol, tcol = st.columns([1, 2])
-    with bcol:
-        if book and book.get("cover_url"):
-            st.image(book["cover_url"], use_container_width=True)
-    with tcol:
-        if book:
-            st.markdown(f"**{book.get('title')}**")
-            st.write(f"저자: {book.get('author')}")
-            if book.get("short_summary"):
-                st.caption(book.get("short_summary"))
-        else:
-            st.info("오늘의 책 정보를 가져오지 못했어요. (OpenLibrary 네트워크 확인)")
-        st.markdown(f"**오늘의 미션:** {mission_text}")
-        st.checkbox("✅ 리딩 미션 완료", key="habit_reading")
 
 
 # -----------------------------
@@ -501,18 +496,56 @@ with u1:
 with u2:
     coach_style = st.radio("🎙️ 코치 스타일", options=coach_styles, index=coach_styles.index(st.session_state.get("coach_style", "따뜻한 멘토")), horizontal=True, key="coach_style")
 
+book = _get_daily_cached("daily_book", get_daily_book)
+mission_options = [
+    "5쪽 읽기",
+    "10분 읽기",
+    "핵심 문장 1개 기록하기",
+    "챕터 1개 훑어보기",
+]
+mission_text = mission_options[date.today().toordinal() % len(mission_options)]
+
+# -----------------------------
+# 오늘의 리딩 미션
+# -----------------------------
+st.subheader("📖 오늘의 리딩 미션")
+with st.container():
+    bcol, tcol = st.columns([1, 2])
+    with bcol:
+        if book and book.get("cover_url"):
+            st.image(book["cover_url"], use_container_width=True)
+    with tcol:
+        if book:
+            st.markdown(f"**{book.get('title')}**")
+            st.write(f"저자: {book.get('author')}")
+            if book.get("short_summary"):
+                st.caption(book.get("short_summary"))
+        else:
+            st.info("오늘의 책 정보를 가져오지 못했어요. (OpenLibrary 네트워크 확인)")
+        st.markdown(f"**오늘의 미션:** {mission_text}")
+        h_reading = st.checkbox("✅ 리딩 미션 완료", key="habit_reading")
+
 habits_state = {
     "기상 미션": bool(h_wake),
     "물 마시기": bool(h_water),
     "공부/독서": bool(h_study),
     "운동하기": bool(h_workout),
     "수면": bool(h_sleep),
-    "리딩 미션": bool(st.session_state.get("habit_reading", False)),
+    "리딩 미션": bool(h_reading),
 }
+
+book_reason = build_book_reason(book, mood, habits_state, mission_text)
+book_with_reason = dict(book) if book else None
+if book_with_reason is not None:
+    book_with_reason["reason"] = book_reason
 
 done_count = sum(1 for v in habits_state.values() if v)
 total_habits = len(habits_state)
 rate = int(round(done_count / total_habits * 100))
+
+with st.container():
+    st.markdown("**📌 책 추천 이유**")
+    st.write(book_reason)
 
 
 # -----------------------------
@@ -526,7 +559,7 @@ m3.metric("기분", f"{mood}/10")
 
 
 # -----------------------------
-# 7일 바 차트 (6일 데모 + 오늘)
+# 31일 바 차트 (6일 데모 + 오늘)
 # session_state로 기록 저장
 # -----------------------------
 def upsert_today_history(done: int, rate: int, mood: int):
@@ -545,9 +578,9 @@ def upsert_today_history(done: int, rate: int, mood: int):
     if not replaced:
         history.append({"date": today_str, "done": int(done), "rate": int(rate), "mood": int(mood)})
 
-    # 최근 7개만 유지
+    # 최근 31개만 유지
     history.sort(key=lambda x: x["date"])
-    st.session_state.history = history[-7:]
+    st.session_state.history = history[-31:]
 
 
 # 차트는 "현재 입력값 기준 오늘"을 반영해서 보여주기
@@ -558,8 +591,37 @@ df["date"] = pd.to_datetime(df["date"])
 df = df.sort_values("date")
 df_display = df.set_index("date")[["rate"]]
 
-st.subheader("📊 최근 7일 달성률")
+st.subheader("📊 최근 31일 달성률")
 st.bar_chart(df_display)
+
+
+# -----------------------------
+# 월간 달력 (달성률)
+# -----------------------------
+st.subheader("🗓️ 월간 달력")
+selected_date = st.date_input("달력 기준 날짜", value=date.today())
+
+calendar_map = {date.fromisoformat(row["date"]): row for row in st.session_state.history}
+cal = calendar.Calendar(firstweekday=0)
+weeks = cal.monthdatescalendar(selected_date.year, selected_date.month)
+
+calendar_rows = []
+for week in weeks:
+    row = []
+    for day in week:
+        if day.month != selected_date.month:
+            row.append("")
+            continue
+        entry = calendar_map.get(day)
+        if entry:
+            row.append(f"{day.day}\n✅ {entry['done']}/{total_habits}\n🙂 {entry['mood']}")
+        else:
+            row.append(str(day.day))
+    calendar_rows.append(row)
+
+calendar_df = pd.DataFrame(calendar_rows, columns=["월", "화", "수", "목", "금", "토", "일"])
+st.dataframe(calendar_df, use_container_width=True, height=260)
+st.caption("최근 기록(최대 31일)만 표시됩니다.")
 
 
 # -----------------------------
@@ -581,7 +643,7 @@ if btn:
             weather=weather,
             dog=dog,
             inspiration=inspiration,
-            book=book,
+            book=book_with_reason,
         )
 
     wcol, dcol = st.columns(2)
