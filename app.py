@@ -1,3 +1,4 @@
+
 # app.py
 import os
 import json
@@ -105,6 +106,104 @@ def get_dog_image():
         return None
 
 
+def get_daily_inspiration():
+    """
+    무료 공개 API로부터 오늘의 영감을 가져옵니다.
+    - ZenQuotes(quote) + NASA APOD(optional image)
+    - 실패 시 None
+    - timeout=10
+    """
+    try:
+        result = {
+            "image_url": None,
+            "title": None,
+            "description": None,
+            "quote": None,
+            "author": None,
+        }
+
+        nasa_key = os.getenv("NASA_API_KEY", "").strip()
+        if nasa_key:
+            url = "https://api.nasa.gov/planetary/apod"
+            params = {"api_key": nasa_key}
+            r = requests.get(url, params=params, timeout=10)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("media_type") == "image":
+                    result["image_url"] = data.get("url")
+                    result["title"] = data.get("title")
+                    result["description"] = data.get("explanation")
+
+        quote_url = "https://zenquotes.io/api/today"
+        r = requests.get(quote_url, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            if isinstance(data, list) and data:
+                result["quote"] = data[0].get("q")
+                result["author"] = data[0].get("a")
+
+        if any(value is not None for value in result.values()):
+            return result
+        return None
+    except Exception:
+        return None
+
+
+def get_daily_book():
+    """
+    OpenLibrary에서 오늘의 추천 도서를 가져옵니다.
+    - 실패 시 None
+    - timeout=10
+    """
+    try:
+        url = "https://openlibrary.org/subjects/self_help.json?limit=30"
+        r = requests.get(url, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        works = data.get("works", [])
+        if not isinstance(works, list) or not works:
+            return None
+
+        idx = date.today().toordinal() % len(works)
+        work = works[idx]
+
+        title = work.get("title") or "알 수 없음"
+        author = "알 수 없음"
+        if isinstance(work.get("authors"), list) and work["authors"]:
+            author = work["authors"][0].get("name") or author
+
+        cover_url = None
+        cover_id = work.get("cover_id")
+        cover_edition = work.get("cover_edition_key")
+        if cover_id:
+            cover_url = f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
+        elif cover_edition:
+            cover_url = f"https://covers.openlibrary.org/b/olid/{cover_edition}-L.jpg"
+
+        short_summary = None
+        work_key = work.get("key")
+        if work_key:
+            work_url = f"https://openlibrary.org{work_key}.json"
+            wr = requests.get(work_url, timeout=10)
+            if wr.status_code == 200:
+                wdata = wr.json()
+                desc = wdata.get("description")
+                if isinstance(desc, dict):
+                    short_summary = desc.get("value")
+                elif isinstance(desc, str):
+                    short_summary = desc
+
+        return {
+            "title": title,
+            "author": author,
+            "cover_url": cover_url,
+            "short_summary": short_summary,
+        }
+    except Exception:
+        return None
+
+
 def _system_prompt_for_style(style: str) -> str:
     if style == "스파르타 코치":
         return (
@@ -130,9 +229,11 @@ def generate_report(
     mood: int,
     weather: dict | None,
     dog: dict | None,
+    inspiration: dict | None,
+    book: dict | None,
 ):
     """
-    습관 + 기분 + 날씨 + 강아지 품종을 묶어 OpenAI에 전달해 리포트를 생성합니다.
+    습관 + 기분 + 날씨 + 강아지 품종 + 영감 + 책 정보를 묶어 OpenAI에 전달해 리포트를 생성합니다.
     - 모델: gpt-5-mini
     - 실패 시 None
     """
@@ -150,6 +251,26 @@ def generate_report(
     dog_summary = "강아지 정보 없음"
     if dog:
         dog_summary = f"오늘의 강아지 품종: {dog.get('breed')}"
+
+    inspiration_summary = "오늘의 영감 정보 없음"
+    if inspiration:
+        inspiration_parts = []
+        if inspiration.get("title"):
+            inspiration_parts.append(f"제목: {inspiration.get('title')}")
+        if inspiration.get("description"):
+            inspiration_parts.append(f"설명: {inspiration.get('description')}")
+        if inspiration.get("quote"):
+            quote_author = inspiration.get("author") or "익명"
+            inspiration_parts.append(f"문구: \"{inspiration.get('quote')}\" — {quote_author}")
+        if inspiration_parts:
+            inspiration_summary = " / ".join(inspiration_parts)
+
+    book_summary = "오늘의 책 정보 없음"
+    if book:
+        book_parts = [f"{book.get('title')} - {book.get('author')}"]
+        if book.get("short_summary"):
+            book_parts.append(f"요약: {book.get('short_summary')}")
+        book_summary = " / ".join(book_parts)
 
     habits_kor = "\n".join([f"- {k}: {'✅' if v else '❌'}" for k, v in habits.items()])
     system_prompt = _system_prompt_for_style(coach_style)
@@ -179,6 +300,14 @@ def generate_report(
 
 [강아지]
 {dog_summary}
+
+[오늘의 영감]
+{inspiration_summary}
+
+[오늘의 책]
+{book_summary}
+
+리포트에는 오늘의 영감 내용을 반드시 언급하고, 책의 주제나 메시지를 사용자의 습관/기분과 연결해줘.
 
 요구 출력 형식:
 {format_spec}
@@ -238,7 +367,7 @@ def _init_history_if_needed():
 
     # 데모용 6일 샘플(고정값)
     demo = []
-    demo_counts = [2, 3, 4, 1, 5, 3]   # 5개 습관 중 달성 개수
+    demo_counts = [3, 4, 4, 2, 5, 3]   # 6개 습관 중 달성 개수
     demo_moods = [5, 6, 7, 4, 8, 6]    # 기분 1~10
     for i in range(6, 0, -1):
         d = today - timedelta(days=i)
@@ -247,7 +376,7 @@ def _init_history_if_needed():
             {
                 "date": d.isoformat(),
                 "done": int(demo_counts[idx]),
-                "rate": int(round(demo_counts[idx] / 5 * 100)),
+                "rate": int(round(demo_counts[idx] / 6 * 100)),
                 "mood": int(demo_moods[idx]),
             }
         )
@@ -258,17 +387,26 @@ def _init_history_if_needed():
 _init_history_if_needed()
 
 
-# -----------------------------
-# 습관 체크인 UI
-# -----------------------------
-st.subheader("✅ 오늘의 습관 체크인")
+def _get_daily_cached(cache_key: str, fetch_fn):
+    today_key = date.today().isoformat()
+    date_key = f"{cache_key}_date"
+    data_key = f"{cache_key}_data"
+    if st.session_state.get(date_key) != today_key:
+        st.session_state[date_key] = today_key
+        st.session_state[data_key] = fetch_fn()
+    return st.session_state.get(data_key)
 
+
+# -----------------------------
+# 공용 설정
+# -----------------------------
 HABITS = [
     ("🌅 기상 미션", "wake"),
     ("💧 물 마시기", "water"),
     ("📚 공부/독서", "study"),
     ("🏋️ 운동하기", "workout"),
     ("😴 수면", "sleep"),
+    ("📖 리딩 미션", "reading"),
 ]
 
 cities = [
@@ -286,6 +424,65 @@ if st.session_state.get("today_key") != today_key:
     st.session_state["mood"] = 6
     st.session_state["city"] = "Seoul"
     st.session_state["coach_style"] = "따뜻한 멘토"
+
+
+# -----------------------------
+# Today's Inspiration
+# -----------------------------
+st.subheader("🌟 Today’s Inspiration")
+inspiration = _get_daily_cached("inspiration", get_daily_inspiration)
+with st.container():
+    if inspiration:
+        left, right = st.columns([1, 2])
+        with left:
+            if inspiration.get("image_url"):
+                st.image(inspiration["image_url"], use_container_width=True)
+        with right:
+            if inspiration.get("title"):
+                st.markdown(f"**{inspiration.get('title')}**")
+            if inspiration.get("description"):
+                st.caption(inspiration.get("description"))
+            if inspiration.get("quote"):
+                quote_author = inspiration.get("author") or "익명"
+                st.markdown(f"> {inspiration.get('quote')}")
+                st.write(f"— {quote_author}")
+    else:
+        st.info("오늘의 영감 정보를 가져오지 못했어요. (네트워크/API 확인)")
+
+
+# -----------------------------
+# Today's Reading Mission
+# -----------------------------
+st.subheader("📖 Today’s Reading Mission")
+book = _get_daily_cached("daily_book", get_daily_book)
+mission_options = [
+    "5쪽 읽기",
+    "10분 읽기",
+    "핵심 문장 1개 기록하기",
+    "챕터 1개 훑어보기",
+]
+mission_text = mission_options[date.today().toordinal() % len(mission_options)]
+with st.container():
+    bcol, tcol = st.columns([1, 2])
+    with bcol:
+        if book and book.get("cover_url"):
+            st.image(book["cover_url"], use_container_width=True)
+    with tcol:
+        if book:
+            st.markdown(f"**{book.get('title')}**")
+            st.write(f"저자: {book.get('author')}")
+            if book.get("short_summary"):
+                st.caption(book.get("short_summary"))
+        else:
+            st.info("오늘의 책 정보를 가져오지 못했어요. (OpenLibrary 네트워크 확인)")
+        st.markdown(f"**오늘의 미션:** {mission_text}")
+        st.checkbox("✅ 리딩 미션 완료", key="habit_reading")
+
+
+# -----------------------------
+# 습관 체크인 UI
+# -----------------------------
+st.subheader("✅ 오늘의 습관 체크인")
 
 c1, c2 = st.columns(2)
 with c1:
@@ -310,10 +507,12 @@ habits_state = {
     "공부/독서": bool(h_study),
     "운동하기": bool(h_workout),
     "수면": bool(h_sleep),
+    "리딩 미션": bool(st.session_state.get("habit_reading", False)),
 }
 
 done_count = sum(1 for v in habits_state.values() if v)
-rate = int(round(done_count / 5 * 100))
+total_habits = len(habits_state)
+rate = int(round(done_count / total_habits * 100))
 
 
 # -----------------------------
@@ -322,7 +521,7 @@ rate = int(round(done_count / 5 * 100))
 st.subheader("📈 오늘의 요약")
 m1, m2, m3 = st.columns(3)
 m1.metric("달성률", f"{rate}%")
-m2.metric("달성 습관", f"{done_count}/5")
+m2.metric("달성 습관", f"{done_count}/{total_habits}")
 m3.metric("기분", f"{mood}/10")
 
 
@@ -381,6 +580,8 @@ if btn:
             mood=mood,
             weather=weather,
             dog=dog,
+            inspiration=inspiration,
+            book=book,
         )
 
     wcol, dcol = st.columns(2)
@@ -412,7 +613,7 @@ if btn:
         st.markdown(report)
 
         share_text = f"""AI 습관 트래커 리포트 ({date.today().isoformat()})
-- 달성률: {rate}% ({done_count}/5)
+- 달성률: {rate}% ({done_count}/{total_habits})
 - 기분: {mood}/10
 - 도시: {city}
 - 코치: {coach_style}
@@ -443,6 +644,17 @@ with st.expander("🔎 API 안내 / 설정 팁"):
 - **Dog CEO API**
   - 별도 키 없이 사용합니다.
   - 네트워크/일시 장애 시 None을 반환하도록 되어 있어요.
+
+- **ZenQuotes API**
+  - 별도 키 없이 사용합니다.
+  - 오늘의 명언을 가져옵니다.
+
+- **NASA APOD API (선택)**
+  - `NASA_API_KEY` 환경변수가 설정된 경우에만 이미지/설명을 표시합니다.
+
+- **OpenLibrary API**
+  - 별도 키 없이 사용합니다.
+  - 오늘의 책 추천을 제공합니다.
 
 - **보안 팁**
   - 배포 시에는 Streamlit Secrets 또는 서버 환경변수로 키를 주입하는 방식을 권장합니다.
